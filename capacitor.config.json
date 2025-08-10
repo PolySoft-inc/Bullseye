@@ -12,6 +12,9 @@
 		"Keyboard": {
 			"resize": "native",
 			"resizeOnFullScreen": true
+		},
+		"Camera": {
+			"permissions": ["camera"]
 		}
 	}
 }

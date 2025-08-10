@@ -8,5 +8,10 @@ export default defineConfig({
 		enhancedImages(), // must come before the SvelteKit plugin,
 		tailwindcss(),
 		sveltekit()
-	]
+	],
+	server: {
+		host: '0.0.0.0', // Listen on all network interfaces
+		port: 5173, // Default Vite port (you can change this)
+		strictPort: false // Allow fallback to other ports if 5173 is taken
+	}
 });

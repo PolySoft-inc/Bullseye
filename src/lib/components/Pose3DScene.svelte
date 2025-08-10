@@ -66,7 +66,7 @@
 	}
 </script>
 
-<!-- Camera with orbit controls -->
+<!-- Camera with static orbit controls -->
 <T.PerspectiveCamera
 	makeDefault
 	position={[1, 0, 1]}
@@ -74,7 +74,7 @@
 		ref.lookAt(0, -0.5, 0);
 	}}
 >
-	<OrbitControls enableDamping autoRotate />
+	<OrbitControls enableDamping autoRotate={false} />
 </T.PerspectiveCamera>
 
 <!-- Lighting -->
@@ -100,29 +100,30 @@
 		{/if}
 	{/each}
 
-	<!-- Draw skeleton connections as simple lines -->
+	<!-- Draw skeleton connections as simple lines 
 	{#each connections as connection}
-		{@const [a, b] = connection}
+	{@const [a, b] = connection}
 		{@const pointA = lerpPoints3D[a]}
 		{@const pointB = lerpPoints3D[b]}
 		{@const keypointA = poses[0].keypoints[a]}
 		{@const keypointB = poses[0].keypoints[b]}
 		{@const shouldShow = shouldDrawConnection(keypointA, keypointB, pointA, pointB)}
-
-		<!-- Always render the line but make it invisible when not needed -->
+		
+		
 		<T.Line visible={shouldShow}>
 			<T.BufferGeometry>
 				<T.BufferAttribute
 					attach="attributes.position"
 					args={[
 						shouldShow && pointA && pointB
-							? new Float32Array([pointA.x, -pointA.y, -pointA.z, pointB.x, -pointB.y, -pointB.z])
-							: new Float32Array([0, 0, 0, 0, 0, 0]),
+						? new Float32Array([pointA.x, -pointA.y, -pointA.z, pointB.x, -pointB.y, -pointB.z])
+						: new Float32Array([0, 0, 0, 0, 0, 0]),
 						3
 					]}
 				/>
 			</T.BufferGeometry>
 			<T.LineBasicMaterial color="#00cccc" />
 		</T.Line>
-	{/each}
+		{/each}
+		-->
 {/if}

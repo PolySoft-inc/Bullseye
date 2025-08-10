@@ -4,6 +4,7 @@
 	import ml5 from 'ml5';
 	import { Canvas } from '@threlte/core';
 	import Pose3DScene from '$lib/components/Pose3DScene.svelte';
+	import { analyzeArcheryForm, detectShotPhase } from '$lib/archery/formAnalysis.js';
 
 	let p5Instance;
 	let video;
@@ -11,6 +12,9 @@
 	let poses = [];
 	let lerpPoints; // For smooth interpolation in 2D
 	let lerpPoints3D = []; // For smooth interpolation in 3D
+	let archeryAnalysis = null; // Current archery form analysis
+	let previousAnalysis = null; // Previous analysis for shot detection
+	let shotPhase = 'idle'; // Current shot phase
 
 	function sketch(p) {
 		p.setup = async function () {
@@ -112,11 +116,29 @@
 					// Force Svelte reactivity by reassigning the array
 					lerpPoints3D = [...lerpPoints3D];
 
-					// Debug: Log occasionally to verify 3D updates
+					// ARCHERY FORM ANALYSIS
+					if (pose.keypoints && pose.keypoints.length >= 25) {
+						// Store previous analysis for shot phase detection
+						previousAnalysis = archeryAnalysis;
+
+						// Analyze current pose for archery form
+						archeryAnalysis = analyzeArcheryForm(pose.keypoints);
+
+						// Detect shot phase
+						if (archeryAnalysis && previousAnalysis) {
+							shotPhase = detectShotPhase(archeryAnalysis, previousAnalysis);
+						}
+					}
+
+					// Debug: Log occasionally to verify analysis
 					if (p.frameCount % 60 === 0) {
-						if (lerpPoints3D.length > 0 && lerpPoints3D[0]) {
-							console.log('Nose 3D position:', lerpPoints3D[0]);
-							console.log('3D points count:', lerpPoints3D.length);
+						if (archeryAnalysis) {
+							console.log('Archery Analysis:', {
+								overallScore: archeryAnalysis.overallScore.toFixed(1),
+								phase: shotPhase,
+								dominantHand: archeryAnalysis.dominantHand,
+								feedback: archeryAnalysis.feedback
+							});
 						}
 					}
 				}
@@ -173,7 +195,7 @@
 	});
 </script>
 
-<div class="h-screen bg-gradient-to-br from-gray-900 to-black pt-6 lg:flex-row">
+<div class="h-full overflow-y-scroll bg-gradient-to-br from-gray-900 to-black pt-6 lg:flex-row">
 	<!-- Main Camera Section -->
 	<div class="flex flex-1 flex-col items-center justify-center p-4">
 		<div class="grid w-full max-w-6xl grid-cols-1 gap-6 lg:grid-cols-2">
@@ -198,5 +220,91 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- Archery Form Analysis Panel -->
+		{#if archeryAnalysis}
+			<div class="mt-8 w-full max-w-4xl">
+				<div class="rounded-xl border border-gray-700 bg-gray-800/50 p-6 backdrop-blur-lg">
+					<h3 class="mb-4 text-2xl font-bold text-white">🏹 Archery Form Analysis</h3>
+
+					<!-- Overall Score and Phase -->
+					<div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+						<div class="rounded-lg bg-gray-700/50 p-4">
+							<h4 class="mb-1 text-sm text-gray-300">Overall Form Score</h4>
+							<div
+								class="text-3xl font-bold {archeryAnalysis.overallScore >= 80
+									? 'text-green-400'
+									: archeryAnalysis.overallScore >= 60
+										? 'text-yellow-400'
+										: 'text-red-400'}"
+							>
+								{archeryAnalysis.overallScore.toFixed(0)}%
+							</div>
+						</div>
+						<div class="rounded-lg bg-gray-700/50 p-4">
+							<h4 class="mb-1 text-sm text-gray-300">Shot Phase</h4>
+							<div class="text-xl font-semibold text-blue-400 capitalize">
+								{shotPhase.replace('_', ' ')}
+							</div>
+						</div>
+						<div class="rounded-lg bg-gray-700/50 p-4">
+							<h4 class="mb-1 text-sm text-gray-300">Dominant Hand</h4>
+							<div class="text-xl font-semibold text-purple-400 capitalize">
+								{archeryAnalysis.dominantHand}
+							</div>
+						</div>
+					</div>
+
+					<!-- Form Scores Breakdown -->
+					<div class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3">
+						{#each Object.entries(archeryAnalysis.scores) as [metric, score]}
+							<div class="rounded-lg bg-gray-700/30 p-3">
+								<h5 class="mb-1 text-xs text-gray-400 capitalize">
+									{metric.replace(/([A-Z])/g, ' $1').toLowerCase()}
+								</h5>
+								<div class="flex items-center justify-between">
+									<span
+										class="text-sm font-medium {score >= 80
+											? 'text-green-400'
+											: score >= 60
+												? 'text-yellow-400'
+												: 'text-red-400'}"
+									>
+										{score.toFixed(0)}%
+									</span>
+									<div class="h-2 w-12 overflow-hidden rounded-full bg-gray-600">
+										<div
+											class="h-full transition-all duration-300 {score >= 80
+												? 'bg-green-400'
+												: score >= 60
+													? 'bg-yellow-400'
+													: 'bg-red-400'}"
+											style="width: {score}%"
+										></div>
+									</div>
+								</div>
+							</div>
+						{/each}
+					</div>
+
+					<!-- Real-time Feedback -->
+					{#if archeryAnalysis.feedback.length > 0}
+						<div class="rounded-lg border border-orange-600/50 bg-orange-900/30 p-4">
+							<h4 class="mb-2 font-semibold text-orange-300">💡 Form Corrections:</h4>
+							<ul class="space-y-1">
+								{#each archeryAnalysis.feedback as feedback}
+									<li class="text-sm text-orange-200">• {feedback}</li>
+								{/each}
+							</ul>
+						</div>
+					{:else}
+						<div class="rounded-lg border border-green-600/50 bg-green-900/30 p-4">
+							<h4 class="font-semibold text-green-300">✅ Good Form!</h4>
+							<p class="text-sm text-green-200">Your archery form looks excellent. Keep it up!</p>
+						</div>
+					{/if}
+				</div>
+			</div>
+		{/if}
 	</div>
 </div>

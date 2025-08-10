@@ -74,7 +74,7 @@
 		ref.lookAt(0, -0.5, 0);
 	}}
 >
-	<OrbitControls enableDamping />
+	<OrbitControls enableDamping autoRotate />
 </T.PerspectiveCamera>
 
 <!-- Lighting -->

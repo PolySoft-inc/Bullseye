@@ -1,5 +1,102 @@
 <script>
 	import { onMount } from 'svelte';
+
+	/* --- ElevenLabs (webrtc branch) --- */
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Conversation } from '@elevenlabs/client';
+	import { PUBLIC_ELEVENLABS_API_KEY, PUBLIC_ELEVENLABS_AGENT_ID } from '$env/static/public';
+
+	let conversation = null;
+	let isConnected = false;
+	let isSpeaking = false;
+	let connectionStatus = 'disconnected';
+	let sessionActive = false;
+	let isAnalyzing = false;
+	let frameCount = 0;
+
+	async function initializeElevenLabs() {
+		try {
+			// Try to get microphone (optional: if denied, still proceed)
+			try {
+				await navigator.mediaDevices.getUserMedia({
+					audio: {
+						echoCancellation: true,
+						noiseSuppression: true,
+						autoGainControl: true
+					}
+				});
+			} catch (_) {
+				/* ignore mic errors; agent can still connect */
+			}
+
+			conversation = await Conversation.startSession({
+				agentId: PUBLIC_ELEVENLABS_AGENT_ID,
+				connectionType: 'webrtc',
+				onMessage: (message) => {
+					console.log('Agent message:', message);
+				},
+				onError: (error) => {
+					console.error('ElevenLabs error:', error);
+					connectionStatus = 'error';
+				},
+				onClose: () => {
+					connectionStatus = 'disconnected';
+					isConnected = false;
+				},
+				onOpen: () => {
+					connectionStatus = 'connected';
+					isConnected = true;
+				},
+				onSpeaking: (speaking) => {
+					isSpeaking = speaking;
+				}
+			});
+
+			await conversation.setVolume({ volume: 0.7 });
+		} catch (error) {
+			console.error('Error initializing ElevenLabs:', error);
+			connectionStatus = 'error';
+		}
+	}
+
+	async function startSession() {
+		if (sessionActive) return;
+		await initializeElevenLabs();
+		sessionActive = true;
+		isAnalyzing = true;
+		frameCount = 0;
+	}
+
+	async function stopSession() {
+		if (!sessionActive) return;
+		sessionActive = false;
+		isAnalyzing = false;
+
+		if (conversation) {
+			try {
+				await conversation.endSession();
+			} catch (e) {
+				console.error('Error ending ElevenLabs conversation:', e);
+			}
+			conversation = null;
+			isConnected = false;
+			connectionStatus = 'disconnected';
+		}
+	}
+
+	async function resetSession() {
+		await stopSession();
+		frameCount = 0;
+	}
+
+	async function sendVoiceMessage() {
+		if (conversation && isConnected) {
+			// Add your voice input logic here if needed
+			console.log('Sending voice message to agent...');
+		}
+	}
+
+	/* --- Pose + 3D + Analysis (main branch) --- */
 	import p5 from 'p5';
 	import ml5 from 'ml5';
 	import { Canvas } from '@threlte/core';
@@ -10,20 +107,18 @@
 	let video;
 	let bodyPose;
 	let poses = [];
-	let lerpPoints; // For smooth interpolation in 2D
-	let lerpPoints3D = []; // For smooth interpolation in 3D
-	let archeryAnalysis = null; // Current archery form analysis
-	let previousAnalysis = null; // Previous analysis for shot detection
-	let shotPhase = 'idle'; // Current shot phase
+	let lerpPoints; // 2D smoothing
+	let lerpPoints3D = []; // 3D smoothing
+
+	let archeryAnalysis = null;
+	let previousAnalysis = null;
+	let shotPhase = 'idle';
 
 	function sketch(p) {
 		p.setup = async function () {
 			p.createCanvas(640, 480);
-
-			// Set frame rate to 30 FPS for smoother pose tracking
 			p.frameRate(30);
 
-			// Load the bodyPose model with smoothing options
 			bodyPose = await ml5.bodyPose('BlazePose', {
 				modelComplexity: 1,
 				smoothLandmarks: true,
@@ -33,151 +128,119 @@
 				minTrackingConfidence: 0.5
 			});
 
-			// Create the video and hide it
 			video = p.createCapture(p.VIDEO);
 			video.size(640, 480);
 			video.hide();
 
-			// Start detecting poses in the webcam video
 			bodyPose.detectStart(video, gotPoses);
 		};
 
 		p.draw = function () {
-			// Only draw if we have video
-			if (video) {
-				// Draw the webcam video
-				p.image(video, 0, 0, p.width, p.height);
+			if (!video) return;
 
-				// Draw interpolated poses
-				if (poses.length > 0) {
-					let pose = poses[0];
+			p.image(video, 0, 0, p.width, p.height);
 
-					// Initialize interpolation points on first detection
-					if (!lerpPoints) {
-						lerpPoints = [];
-						lerpPoints3D = [];
-						for (let i = 0; i < pose.keypoints.length; i++) {
-							lerpPoints[i] = p.createVector(pose.keypoints[i].x, pose.keypoints[i].y);
-							// Initialize 3D points (use keypoints3D if available, otherwise fake Z)
-							if (pose.keypoints3D && pose.keypoints3D[i]) {
-								lerpPoints3D[i] = {
-									x: pose.keypoints3D[i].x,
-									y: pose.keypoints3D[i].y,
-									z: pose.keypoints3D[i].z
-								};
-							} else {
-								// Create realistic 3D coordinates from 2D data
-								let normalizedX = (pose.keypoints[i].x - 320) / 320; // -1 to 1
-								let normalizedY = (pose.keypoints[i].y - 240) / 240; // -1 to 1
+			if (poses.length > 0) {
+				const pose = poses[0];
 
-								lerpPoints3D[i] = {
-									x: normalizedX,
-									y: -normalizedY, // Flip Y for correct orientation
-									z: 0 // Flat for 2D fallback
-								};
-							}
-						}
-					}
-
-					// Smoothly interpolate keypoints
+				// Initialize lerp points
+				if (!lerpPoints) {
+					lerpPoints = [];
+					lerpPoints3D = [];
 					for (let i = 0; i < pose.keypoints.length; i++) {
-						let keypoint = pose.keypoints[i];
-						let lerpPoint = lerpPoints[i];
-						let lerpPoint3D = lerpPoints3D[i];
-						let amt = 0.3; // Interpolation amount (increased for more reactivity)
-
-						if (keypoint.confidence > 0.3) {
-							// 2D interpolation
-							lerpPoint.x = p.lerp(lerpPoint.x, keypoint.x, amt);
-							lerpPoint.y = p.lerp(lerpPoint.y, keypoint.y, amt);
-
-							// 3D interpolation - ensure lerpPoint3D exists
-							if (lerpPoint3D && pose.keypoints3D && pose.keypoints3D[i]) {
-								let kp3D = pose.keypoints3D[i];
-								lerpPoint3D.x = p.lerp(lerpPoint3D.x, kp3D.x, amt);
-								lerpPoint3D.y = p.lerp(lerpPoint3D.y, kp3D.y, amt);
-								lerpPoint3D.z = p.lerp(lerpPoint3D.z, kp3D.z, amt);
-							} else if (lerpPoint3D) {
-								// Fallback: use normalized 2D coordinates with better scaling
-								let normalizedX = (keypoint.x - 320) / 320; // -1 to 1
-								let normalizedY = (keypoint.y - 240) / 240; // -1 to 1
-								lerpPoint3D.x = p.lerp(lerpPoint3D.x, normalizedX, amt);
-								lerpPoint3D.y = p.lerp(lerpPoint3D.y, -normalizedY, amt); // Flip Y
-								lerpPoint3D.z = p.lerp(lerpPoint3D.z, 0, amt); // Keep Z at 0 for 2D fallback
-							}
-
-							// Draw interpolated keypoints
-							p.fill(0, 255, 0);
-							p.noStroke();
-							p.circle(lerpPoint.x, lerpPoint.y, 10);
+						lerpPoints[i] = p.createVector(pose.keypoints[i].x, pose.keypoints[i].y);
+						if (pose.keypoints3D && pose.keypoints3D[i]) {
+							lerpPoints3D[i] = {
+								x: pose.keypoints3D[i].x,
+								y: pose.keypoints3D[i].y,
+								z: pose.keypoints3D[i].z
+							};
+						} else {
+							const normalizedX = (pose.keypoints[i].x - 320) / 320;
+							const normalizedY = (pose.keypoints[i].y - 240) / 240;
+							lerpPoints3D[i] = { x: normalizedX, y: -normalizedY, z: 0 };
 						}
 					}
+				}
 
-					// Force Svelte reactivity by reassigning the array
-					lerpPoints3D = [...lerpPoints3D];
+				// Interpolate and draw
+				for (let i = 0; i < pose.keypoints.length; i++) {
+					const keypoint = pose.keypoints[i];
+					const lp2 = lerpPoints[i];
+					const lp3 = lerpPoints3D[i];
+					const amt = 0.3;
 
-					// ARCHERY FORM ANALYSIS
-					if (pose.keypoints && pose.keypoints.length >= 25) {
-						// Store previous analysis for shot phase detection
-						previousAnalysis = archeryAnalysis;
+					if (keypoint.confidence > 0.3) {
+						lp2.x = p.lerp(lp2.x, keypoint.x, amt);
+						lp2.y = p.lerp(lp2.y, keypoint.y, amt);
 
-						// Analyze current pose for archery form
-						archeryAnalysis = analyzeArcheryForm(pose.keypoints);
-
-						// Detect shot phase
-						if (archeryAnalysis && previousAnalysis) {
-							shotPhase = detectShotPhase(archeryAnalysis, previousAnalysis);
+						if (pose.keypoints3D && pose.keypoints3D[i]) {
+							const kp3D = pose.keypoints3D[i];
+							lp3.x = p.lerp(lp3.x, kp3D.x, amt);
+							lp3.y = p.lerp(lp3.y, kp3D.y, amt);
+							lp3.z = p.lerp(lp3.z, kp3D.z, amt);
+						} else {
+							const nx = (keypoint.x - 320) / 320;
+							const ny = (keypoint.y - 240) / 240;
+							lp3.x = p.lerp(lp3.x, nx, amt);
+							lp3.y = p.lerp(lp3.y, -ny, amt);
+							lp3.z = p.lerp(lp3.z, 0, amt);
 						}
-					}
 
-					// Debug: Log occasionally to verify analysis
-					if (p.frameCount % 60 === 0) {
-						if (archeryAnalysis) {
-							console.log('Archery Analysis:', {
-								overallScore: archeryAnalysis.overallScore.toFixed(1),
-								phase: shotPhase,
-								dominantHand: archeryAnalysis.dominantHand,
-								feedback: archeryAnalysis.feedback
-							});
-						}
+						p.fill(0, 255, 0);
+						p.noStroke();
+						p.circle(lp2.x, lp2.y, 10);
 					}
+				}
+
+				// Svelte reactivity for 3D points
+				lerpPoints3D = [...lerpPoints3D];
+
+				// Analysis
+				if (pose.keypoints && pose.keypoints.length >= 25) {
+					previousAnalysis = archeryAnalysis;
+					archeryAnalysis = analyzeArcheryForm(pose.keypoints);
+					if (archeryAnalysis && previousAnalysis) {
+						shotPhase = detectShotPhase(archeryAnalysis, previousAnalysis);
+					}
+				}
+
+				// Count frames only when analyzing and we have a pose
+				if (isAnalyzing) frameCount++;
+
+				// Occasional debug
+				if (p.frameCount % 60 === 0 && archeryAnalysis) {
+					console.log('Archery Analysis:', {
+						overallScore: archeryAnalysis.overallScore.toFixed(1),
+						phase: shotPhase,
+						dominantHand: archeryAnalysis.dominantHand,
+						feedback: archeryAnalysis.feedback
+					});
 				}
 			}
 		};
 	}
 
-	// Callback function for when bodyPose outputs data
 	function gotPoses(results) {
-		// Save the output to the poses variable
 		poses = results;
-
-		// Debug: Check if we have 3D data (only log occasionally)
+		// optional: light debug for 3D availability
 		if (poses.length > 0 && Math.random() < 0.1) {
-			// Log 10% of the time
 			const pose = poses[0];
-			if (pose.keypoints3D) {
-				console.log('3D keypoints available:', pose.keypoints3D.length);
-				// Log a specific point to see if it's changing
-				if (pose.keypoints3D[0]) {
-					console.log(
-						'Nose position:',
-						pose.keypoints3D[0].x.toFixed(3),
-						pose.keypoints3D[0].y.toFixed(3),
-						pose.keypoints3D[0].z.toFixed(3)
-					);
-				}
-			} else {
-				console.log('No 3D keypoints - using 2D fallback');
+			if (pose.keypoints3D?.[0]) {
+				console.log(
+					'3D nose:',
+					pose.keypoints3D[0].x.toFixed(3),
+					pose.keypoints3D[0].y.toFixed(3),
+					pose.keypoints3D[0].z.toFixed(3)
+				);
 			}
 		}
 	}
 
 	onMount(() => {
-		// Create p5 instance and attach to a div
 		const container = document.getElementById('p5-container');
 		p5Instance = new p5(sketch, container);
 
-		// Make canvas responsive after it's created
 		setTimeout(() => {
 			const canvas = container.querySelector('canvas');
 			if (canvas) {
@@ -186,18 +249,47 @@
 			}
 		}, 100);
 
-		// Cleanup function
-		return () => {
-			if (p5Instance) {
-				p5Instance.remove();
+		return async () => {
+			if (p5Instance) p5Instance.remove();
+			if (conversation) {
+				try {
+					await conversation.endSession();
+				} catch (e) {
+					console.error('Cleanup endSession error:', e);
+				}
 			}
 		};
 	});
 </script>
 
 <div class="h-full overflow-y-scroll bg-gradient-to-br from-gray-900 to-black pt-6 lg:flex-row">
-	<!-- Main Camera Section -->
 	<div class="flex flex-1 flex-col items-center justify-center p-4">
+		<!-- Session Controls -->
+		<div class="mb-6 flex gap-4">
+			{#if !sessionActive}
+				<Button onclick={startSession} class="bg-green-600 px-8 py-3 text-lg hover:bg-green-700">
+					Start Training
+				</Button>
+			{:else}
+				<Button onclick={stopSession} class="bg-red-600 px-6 py-3 hover:bg-red-700">Stop</Button>
+				<Button onclick={resetSession} variant="outline" class="px-6 py-3">Reset</Button>
+			{/if}
+		</div>
+
+		<!-- Status Row -->
+		<div class="mb-8 flex items-center justify-center gap-6 text-sm text-gray-300">
+			<div class="flex items-center gap-2">
+				<div class="h-2 w-2 rounded-full {isConnected ? 'bg-green-500' : 'bg-gray-500'}"></div>
+				<span>Voice coach {isConnected ? 'connected' : 'disconnected'}</span>
+			</div>
+			<div>Analyzing: {isAnalyzing ? 'yes' : 'no'}</div>
+			<div>Frames: {frameCount}</div>
+			{#if isConnected}
+				<div>Agent speaking: {isSpeaking ? 'yes' : 'no'}</div>
+			{/if}
+		</div>
+
+		<!-- Views -->
 		<div class="grid w-full max-w-6xl grid-cols-1 gap-6 lg:grid-cols-2">
 			<!-- 2D Pose View -->
 			<div class="flex flex-col items-center">
@@ -225,7 +317,7 @@
 		{#if archeryAnalysis}
 			<div class="mt-8 w-full max-w-4xl">
 				<div class="rounded-xl border border-gray-700 bg-gray-800/50 p-6 backdrop-blur-lg">
-					<h3 class="mb-4 text-2xl font-bold text-white">🏹 Archery Form Analysis</h3>
+					<h3 class="mb-4 text-2xl font-bold text-white">Archery Form Analysis</h3>
 
 					<!-- Overall Score and Phase -->
 					<div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -255,7 +347,7 @@
 						</div>
 					</div>
 
-					<!-- Form Scores Breakdown -->
+					<!-- Scores Breakdown -->
 					<div class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3">
 						{#each Object.entries(archeryAnalysis.scores) as [metric, score]}
 							<div class="rounded-lg bg-gray-700/30 p-3">
@@ -290,7 +382,7 @@
 					<!-- Real-time Feedback -->
 					{#if archeryAnalysis.feedback.length > 0}
 						<div class="rounded-lg border border-orange-600/50 bg-orange-900/30 p-4">
-							<h4 class="mb-2 font-semibold text-orange-300">💡 Form Corrections:</h4>
+							<h4 class="mb-2 font-semibold text-orange-300">Form Corrections:</h4>
 							<ul class="space-y-1">
 								{#each archeryAnalysis.feedback as feedback}
 									<li class="text-sm text-orange-200">• {feedback}</li>
@@ -299,8 +391,8 @@
 						</div>
 					{:else}
 						<div class="rounded-lg border border-green-600/50 bg-green-900/30 p-4">
-							<h4 class="font-semibold text-green-300">✅ Good Form!</h4>
-							<p class="text-sm text-green-200">Your archery form looks excellent. Keep it up!</p>
+							<h4 class="font-semibold text-green-300">Good Form</h4>
+							<p class="text-sm text-green-200">Your archery form looks excellent. Keep it up.</p>
 						</div>
 					{/if}
 				</div>

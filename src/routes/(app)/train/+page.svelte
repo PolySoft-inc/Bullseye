@@ -1,220 +1,201 @@
 <script>
-	import { onMount } from "svelte";
-	import { Button } from "$lib/components/ui/button/index.js";
+	import { onMount } from 'svelte';
+	import p5 from 'p5';
+	import ml5 from 'ml5';
+	import { Canvas } from '@threlte/core';
+	import Pose3DScene from '$lib/components/Pose3DScene.svelte';
 
-	let stream;
-	let videoRef;
-	let isAnalyzing = false;
-	let sessionActive = false;
-	let frameCount = 0;
-	let coachingTips = ["Stand with feet shoulder-width apart", "Keep your bow arm straight and strong", "Draw with your back muscles, not just your arm", "Anchor consistently at the corner of your mouth", "Focus on your target, let everything else blur"];
-	let currentTip = 0;
-	let analysisResults = {
-		posture: 85,
-		armPosition: 72,
-		drawLength: 90,
-		stability: 78,
-	};
+	let p5Instance;
+	let video;
+	let bodyPose;
+	let poses = [];
+	let lerpPoints; // For smooth interpolation in 2D
+	let lerpPoints3D = []; // For smooth interpolation in 3D
 
-	/**
-	 * Function to get the camera stream.
-	 */
-	async function getStream() {
-		try {
-			console.log("Requesting camera access...");
-			// Request access to the front camera
-			stream = await navigator.mediaDevices.getUserMedia({
-				video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-				audio: false,
+	function sketch(p) {
+		p.setup = async function () {
+			p.createCanvas(640, 480);
+
+			// Set frame rate to 30 FPS for smoother pose tracking
+			p.frameRate(30);
+
+			// Load the bodyPose model with smoothing options
+			bodyPose = await ml5.bodyPose('BlazePose', {
+				modelComplexity: 1,
+				smoothLandmarks: true,
+				enableSegmentation: false,
+				smoothSegmentation: false,
+				minDetectionConfidence: 0.5,
+				minTrackingConfidence: 0.5
 			});
-			console.log("Camera access granted!");
-			// Assign the stream to the video element's srcObject
-			if (videoRef) {
-				videoRef.srcObject = stream;
+
+			// Create the video and hide it
+			video = p.createCapture(p.VIDEO);
+			video.size(640, 480);
+			video.hide();
+
+			// Start detecting poses in the webcam video
+			bodyPose.detectStart(video, gotPoses);
+		};
+
+		p.draw = function () {
+			// Only draw if we have video
+			if (video) {
+				// Draw the webcam video
+				p.image(video, 0, 0, p.width, p.height);
+
+				// Draw interpolated poses
+				if (poses.length > 0) {
+					let pose = poses[0];
+
+					// Initialize interpolation points on first detection
+					if (!lerpPoints) {
+						lerpPoints = [];
+						lerpPoints3D = [];
+						for (let i = 0; i < pose.keypoints.length; i++) {
+							lerpPoints[i] = p.createVector(pose.keypoints[i].x, pose.keypoints[i].y);
+							// Initialize 3D points (use keypoints3D if available, otherwise fake Z)
+							if (pose.keypoints3D && pose.keypoints3D[i]) {
+								lerpPoints3D[i] = {
+									x: pose.keypoints3D[i].x,
+									y: pose.keypoints3D[i].y,
+									z: pose.keypoints3D[i].z
+								};
+							} else {
+								// Create realistic 3D coordinates from 2D data
+								let normalizedX = (pose.keypoints[i].x - 320) / 320; // -1 to 1
+								let normalizedY = (pose.keypoints[i].y - 240) / 240; // -1 to 1
+
+								lerpPoints3D[i] = {
+									x: normalizedX,
+									y: -normalizedY, // Flip Y for correct orientation
+									z: 0 // Flat for 2D fallback
+								};
+							}
+						}
+					}
+
+					// Smoothly interpolate keypoints
+					for (let i = 0; i < pose.keypoints.length; i++) {
+						let keypoint = pose.keypoints[i];
+						let lerpPoint = lerpPoints[i];
+						let lerpPoint3D = lerpPoints3D[i];
+						let amt = 0.3; // Interpolation amount (increased for more reactivity)
+
+						if (keypoint.confidence > 0.3) {
+							// 2D interpolation
+							lerpPoint.x = p.lerp(lerpPoint.x, keypoint.x, amt);
+							lerpPoint.y = p.lerp(lerpPoint.y, keypoint.y, amt);
+
+							// 3D interpolation - ensure lerpPoint3D exists
+							if (lerpPoint3D && pose.keypoints3D && pose.keypoints3D[i]) {
+								let kp3D = pose.keypoints3D[i];
+								lerpPoint3D.x = p.lerp(lerpPoint3D.x, kp3D.x, amt);
+								lerpPoint3D.y = p.lerp(lerpPoint3D.y, kp3D.y, amt);
+								lerpPoint3D.z = p.lerp(lerpPoint3D.z, kp3D.z, amt);
+							} else if (lerpPoint3D) {
+								// Fallback: use normalized 2D coordinates with better scaling
+								let normalizedX = (keypoint.x - 320) / 320; // -1 to 1
+								let normalizedY = (keypoint.y - 240) / 240; // -1 to 1
+								lerpPoint3D.x = p.lerp(lerpPoint3D.x, normalizedX, amt);
+								lerpPoint3D.y = p.lerp(lerpPoint3D.y, -normalizedY, amt); // Flip Y
+								lerpPoint3D.z = p.lerp(lerpPoint3D.z, 0, amt); // Keep Z at 0 for 2D fallback
+							}
+
+							// Draw interpolated keypoints
+							p.fill(0, 255, 0);
+							p.noStroke();
+							p.circle(lerpPoint.x, lerpPoint.y, 10);
+						}
+					}
+
+					// Force Svelte reactivity by reassigning the array
+					lerpPoints3D = [...lerpPoints3D];
+
+					// Debug: Log occasionally to verify 3D updates
+					if (p.frameCount % 60 === 0) {
+						if (lerpPoints3D.length > 0 && lerpPoints3D[0]) {
+							console.log('Nose 3D position:', lerpPoints3D[0]);
+							console.log('3D points count:', lerpPoints3D.length);
+						}
+					}
+				}
 			}
-		} catch (err) {
-			console.error("Error accessing camera:", err);
-			// Handle permission errors or other issues
+		};
+	}
+
+	// Callback function for when bodyPose outputs data
+	function gotPoses(results) {
+		// Save the output to the poses variable
+		poses = results;
+
+		// Debug: Check if we have 3D data (only log occasionally)
+		if (poses.length > 0 && Math.random() < 0.1) {
+			// Log 10% of the time
+			const pose = poses[0];
+			if (pose.keypoints3D) {
+				console.log('3D keypoints available:', pose.keypoints3D.length);
+				// Log a specific point to see if it's changing
+				if (pose.keypoints3D[0]) {
+					console.log(
+						'Nose position:',
+						pose.keypoints3D[0].x.toFixed(3),
+						pose.keypoints3D[0].y.toFixed(3),
+						pose.keypoints3D[0].z.toFixed(3)
+					);
+				}
+			} else {
+				console.log('No 3D keypoints - using 2D fallback');
+			}
 		}
 	}
 
-	// Call getStream when the component mounts
 	onMount(() => {
-		getStream();
+		// Create p5 instance and attach to a div
+		const container = document.getElementById('p5-container');
+		p5Instance = new p5(sketch, container);
 
-		// Rotate coaching tips every 4 seconds
-		const tipInterval = setInterval(() => {
-			currentTip = (currentTip + 1) % coachingTips.length;
-		}, 4000);
-
-		// Clean up the stream when the component is destroyed
-		return () => {
-			if (stream) {
-				stream.getTracks().forEach((track) => track.stop());
+		// Make canvas responsive after it's created
+		setTimeout(() => {
+			const canvas = container.querySelector('canvas');
+			if (canvas) {
+				canvas.style.maxWidth = '100%';
+				canvas.style.height = 'auto';
 			}
-			clearInterval(tipInterval);
+		}, 100);
+
+		// Cleanup function
+		return () => {
+			if (p5Instance) {
+				p5Instance.remove();
+			}
 		};
 	});
-
-	function startSession() {
-		sessionActive = true;
-		isAnalyzing = true;
-		frameCount = 0;
-
-		// Simulate frame capture every second for analysis
-		const captureInterval = setInterval(() => {
-			if (!sessionActive) {
-				clearInterval(captureInterval);
-				return;
-			}
-
-			frameCount++;
-			captureFrame();
-		}, 1000);
-	}
-
-	function captureFrame() {
-		// This would capture the current frame and send to backend
-		console.log(`Capturing frame ${frameCount} for analysis...`);
-		// TODO: Implement actual frame capture and API call
-	}
-
-	function stopSession() {
-		sessionActive = false;
-		isAnalyzing = false;
-		frameCount = 0;
-	}
-
-	function resetSession() {
-		stopSession();
-		// Reset any analysis data
-		analysisResults = {
-			posture: 0,
-			armPosition: 0,
-			drawLength: 0,
-			stability: 0,
-		};
-	}
 </script>
 
-<div class=" lg:flex-row h-screen bg-gradient-to-br from-gray-900 to-black pt-6">
+<div class="h-screen bg-gradient-to-br from-gray-900 to-black pt-6 lg:flex-row">
 	<!-- Main Camera Section -->
-	<div class="flex-1 flex flex-col items-center justify-center p-4">
-		<!-- Camera Feed with Overlay -->
-		<div class="relative">
-			<video bind:this={videoRef} autoplay playsinline muted class="w-full max-w-lg h-auto rounded-xl shadow-2xl -scale-x-100 border-2 border-blue-500"></video>
-
-			<!-- Analysis Overlay -->
-			{#if isAnalyzing}
-				<div class="absolute inset-0 border-4 border-green-400 rounded-xl animate-pulse">
-					<div class="absolute top-2 right-2 bg-red-500 w-4 h-4 rounded-full animate-ping"></div>
-					<div class="absolute bottom-2 left-2 bg-black bg-opacity-60 text-white px-2 py-1 rounded text-sm">
-						Analyzing... Frame {frameCount}
-					</div>
-				</div>
-			{/if}
-		</div>
-
-		<!-- Session Controls -->
-		<div class="mt-6 flex gap-4">
-			{#if !stream}
-				<div class="flex items-center justify-center min-h-[50px] text-white text-lg">
-					<p>Loading camera...</p>
-				</div>
-			{:else if !sessionActive}
-				<Button onclick={startSession} class="bg-green-600 hover:bg-green-700 px-8 py-3 text-lg">🏹 Start Training</Button>
-			{:else}
-				<Button onclick={stopSession} class="bg-red-600 hover:bg-red-700 px-6 py-3">⏹ Stop</Button>
-				<Button onclick={resetSession} variant="outline" class="px-6 py-3">🔄 Reset</Button>
-			{/if}
-		</div>
-	</div>
-
-	<!-- Coaching Panel -->
-	<div class="lg:w-80 p-6 flex flex-col">
-		<!-- AI Coach Status -->
-		<div class="mb-6">
-			<h2 class="text-xl font-bold text-white mb-2">🎯 AI Archery Coach</h2>
-			<div class="flex items-center gap-2 text-sm">
-				<div class="w-2 h-2 rounded-full {sessionActive ? 'bg-green-400' : 'bg-gray-500'}"></div>
-				<span class="text-gray-300">
-					{sessionActive ? "Actively Coaching" : "Ready to Help"}
-				</span>
+	<div class="flex flex-1 flex-col items-center justify-center p-4">
+		<div class="grid w-full max-w-6xl grid-cols-1 gap-6 lg:grid-cols-2">
+			<!-- 2D Pose View -->
+			<div class="flex flex-col items-center">
+				<h2 class="mb-4 text-xl text-white">2D Pose Detection</h2>
+				<div
+					id="p5-container"
+					class="max-w-full overflow-hidden rounded-xl border-2 border-blue-500 shadow-2xl"
+				></div>
 			</div>
-		</div>
 
-		<!-- Form Analysis Scores -->
-		<div class="mb-6">
-			<h3 class="text-white font-semibold mb-3">📊 Form Analysis</h3>
-			<div class="space-y-3">
-				<!-- Posture Score -->
-				<div>
-					<div class="flex justify-between text-sm mb-1">
-						<span class="text-gray-300">Posture</span>
-						<span class="text-white">{analysisResults.posture}%</span>
-					</div>
-					<div class="w-full bg-gray-700 rounded-full h-2">
-						<div class="bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 h-2 rounded-full transition-all duration-500" style="width: {analysisResults.posture}%"></div>
-					</div>
+			<!-- 3D Pose View -->
+			<div class="flex flex-col items-center">
+				<h2 class="mb-4 text-xl text-white">3D Pose Visualization</h2>
+				<div
+					class="aspect-square w-full max-w-lg overflow-hidden rounded-xl border-2 border-purple-500 shadow-2xl"
+				>
+					<Canvas>
+						<Pose3DScene {poses} {lerpPoints3D} />
+					</Canvas>
 				</div>
-
-				<!-- Arm Position -->
-				<div>
-					<div class="flex justify-between text-sm mb-1">
-						<span class="text-gray-300">Arm Position</span>
-						<span class="text-white">{analysisResults.armPosition}%</span>
-					</div>
-					<div class="w-full bg-gray-700 rounded-full h-2">
-						<div class="bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 h-2 rounded-full transition-all duration-500" style="width: {analysisResults.armPosition}%"></div>
-					</div>
-				</div>
-
-				<!-- Draw Length -->
-				<div>
-					<div class="flex justify-between text-sm mb-1">
-						<span class="text-gray-300">Draw Length</span>
-						<span class="text-white">{analysisResults.drawLength}%</span>
-					</div>
-					<div class="w-full bg-gray-700 rounded-full h-2">
-						<div class="bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 h-2 rounded-full transition-all duration-500" style="width: {analysisResults.drawLength}%"></div>
-					</div>
-				</div>
-
-				<!-- Stability -->
-				<div>
-					<div class="flex justify-between text-sm mb-1">
-						<span class="text-gray-300">Stability</span>
-						<span class="text-white">{analysisResults.stability}%</span>
-					</div>
-					<div class="w-full bg-gray-700 rounded-full h-2">
-						<div class="bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 h-2 rounded-full transition-all duration-500" style="width: {analysisResults.stability}%"></div>
-					</div>
-				</div>
-			</div>
-		</div>
-
-		<!-- Session Stats -->
-		{#if sessionActive}
-			<div class="bg-gray-700 rounded-lg p-4">
-				<h3 class="text-white font-semibold mb-2">📈 Session Stats</h3>
-				<div class="space-y-2 text-sm">
-					<div class="flex justify-between">
-						<span class="text-gray-300">Frames Analyzed:</span>
-						<span class="text-white">{frameCount}</span>
-					</div>
-					<div class="flex justify-between">
-						<span class="text-gray-300">Session Time:</span>
-						<span class="text-white">{Math.floor(frameCount / 60)}:{String(frameCount % 60).padStart(2, "0")}</span>
-					</div>
-				</div>
-			</div>
-		{/if}
-
-		<!-- Voice Feedback Indicator -->
-		<div class="mt-auto">
-			<div class="flex items-center justify-center gap-2 text-gray-400 text-sm">
-				<div class="w-2 h-2 rounded-full bg-purple-500 animate-pulse"></div>
-				<span>Voice coaching ready</span>
 			</div>
 		</div>
 	</div>

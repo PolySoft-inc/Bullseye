@@ -1,0 +1,17 @@
+{
+	"appId": "com.mars.bullseye",
+	"appName": "Bullseye",
+	"webDir": "build",
+	"allowsLinkPreview": false,
+	"server": {
+		"iosScheme": "https",
+		"url": "http://192.168.68.76:5173/",
+		"cleartext": true
+	},
+	"plugins": {
+		"Keyboard": {
+			"resize": "native",
+			"resizeOnFullScreen": true
+		}
+	}
+}

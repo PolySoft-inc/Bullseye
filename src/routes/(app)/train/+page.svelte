@@ -207,16 +207,6 @@
 
 				// Count frames only when analyzing and we have a pose
 				if (isAnalyzing) frameCount++;
-
-				// Occasional debug
-				if (p.frameCount % 60 === 0 && archeryAnalysis) {
-					console.log('Archery Analysis:', {
-						overallScore: archeryAnalysis.overallScore.toFixed(1),
-						phase: shotPhase,
-						dominantHand: archeryAnalysis.dominantHand,
-						feedback: archeryAnalysis.feedback
-					});
-				}
 			}
 		};
 	}
@@ -226,14 +216,6 @@
 		// optional: light debug for 3D availability
 		if (poses.length > 0 && Math.random() < 0.1) {
 			const pose = poses[0];
-			if (pose.keypoints3D?.[0]) {
-				console.log(
-					'3D nose:',
-					pose.keypoints3D[0].x.toFixed(3),
-					pose.keypoints3D[0].y.toFixed(3),
-					pose.keypoints3D[0].z.toFixed(3)
-				);
-			}
 		}
 	}
 

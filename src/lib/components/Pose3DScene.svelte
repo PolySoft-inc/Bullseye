@@ -107,21 +107,22 @@
 		{@const pointB = lerpPoints3D[b]}
 		{@const keypointA = poses[0].keypoints[a]}
 		{@const keypointB = poses[0].keypoints[b]}
+		{@const shouldShow = shouldDrawConnection(keypointA, keypointB, pointA, pointB)}
 
-		{#if shouldDrawConnection(keypointA, keypointB, pointA, pointB)}
-			<!-- Simple line geometry connecting two points -->
-			<T.Line>
-				<T.BufferGeometry>
-					<T.BufferAttribute
-						attach="attributes.position"
-						args={[
-							new Float32Array([pointA.x, -pointA.y, -pointA.z, pointB.x, -pointB.y, -pointB.z]),
-							3
-						]}
-					/>
-				</T.BufferGeometry>
-				<T.LineBasicMaterial color="#00cccc" linewidth="3" />
-			</T.Line>
-		{/if}
+		<!-- Always render the line but make it invisible when not needed -->
+		<T.Line visible={shouldShow}>
+			<T.BufferGeometry>
+				<T.BufferAttribute
+					attach="attributes.position"
+					args={[
+						shouldShow && pointA && pointB
+							? new Float32Array([pointA.x, -pointA.y, -pointA.z, pointB.x, -pointB.y, -pointB.z])
+							: new Float32Array([0, 0, 0, 0, 0, 0]),
+						3
+					]}
+				/>
+			</T.BufferGeometry>
+			<T.LineBasicMaterial color="#00cccc" />
+		</T.Line>
 	{/each}
 {/if}

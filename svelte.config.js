@@ -14,10 +14,7 @@ const config = {
 			fallback: undefined,
 			precompress: false,
 			strict: true
-		}),
-		env: {
-			dir: process.cwd()
-		}
+		})
 	}
 };
 

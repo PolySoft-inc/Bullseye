@@ -14,6 +14,11 @@
 	let isAnalyzing = false;
 	let frameCount = 0;
 
+	// Add error throttling variables
+	let errorCount = 0;
+	let lastErrorTime = 0;
+	const ERROR_THROTTLE_MS = 2000; // Only log errors every 2 seconds
+
 	async function initializeElevenLabs() {
 		try {
 			// Try to get microphone (optional: if denied, still proceed)
@@ -36,7 +41,15 @@
 					console.log('Agent message:', message);
 				},
 				onError: (error) => {
-					console.error('ElevenLabs error:', error);
+					// Throttle error logging to prevent spam
+					const now = Date.now();
+					errorCount++;
+
+					if (now - lastErrorTime > ERROR_THROTTLE_MS) {
+						console.error(`ElevenLabs error #${errorCount}:`, error);
+						lastErrorTime = now;
+					}
+
 					connectionStatus = 'error';
 				},
 				onClose: () => {
@@ -46,6 +59,8 @@
 				onOpen: () => {
 					connectionStatus = 'connected';
 					isConnected = true;
+					// Reset error count on successful connection
+					errorCount = 0;
 				},
 				onSpeaking: (speaking) => {
 					isSpeaking = speaking;
